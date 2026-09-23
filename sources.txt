@@ -1,0 +1,7 @@
+# Danh sách các trang cần tổng hợp — mỗi dòng một địa chỉ (URL).
+# Dòng bắt đầu bằng "#" là ghi chú, sẽ bị bỏ qua.
+# Hỗ trợ cả trang web thường lẫn RSS feed (RSS cho kết quả gọn và chính xác hơn).
+#
+# THAY CÁC DÒNG DƯỚI ĐÂY BẰNG CÁC TRANG CỦA BẠN:
+https://vnexpress.net/rss/tin-moi-nhat.rss
+https://tuoitre.vn/rss/tin-moi-nhat.rss

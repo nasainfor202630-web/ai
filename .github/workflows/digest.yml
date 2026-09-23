@@ -1,0 +1,28 @@
+name: Bản tin tổng hợp
+
+on:
+  schedule:
+    # Giờ Việt Nam = UTC + 7
+    - cron: "0 23 * * *"  # 06:00 sáng
+    - cron: "0 5 * * *"   # 12:00 trưa
+    - cron: "0 14 * * *"  # 21:00 tối
+  workflow_dispatch: {}   # cho phép bấm chạy thử bằng tay
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: python digest.py
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          ZALO_BOT_TOKEN: ${{ secrets.ZALO_BOT_TOKEN }}
+          ZALO_CHAT_ID: ${{ secrets.ZALO_CHAT_ID }}
