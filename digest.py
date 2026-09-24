@@ -13,14 +13,21 @@ import sys
 from datetime import datetime, timedelta, timezone
 from email.mime.text import MIMEText
 from pathlib import Path
+from urllib.parse import urljoin
 
 import feedparser
 import requests
 from bs4 import BeautifulSoup
 
 VN_TZ = timezone(timedelta(hours=7))
-USER_AGENT = "Mozilla/5.0 (compatible; DailyDigestBot/1.0)"
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/128.0 Safari/537.36"
+)
+BROWSER_USER_AGENT = USER_AGENT
 MAX_ITEMS_PER_FEED = 15
+MAX_LINKS_PER_PAGE = 40
+MIN_HEADLINES = 5
 MAX_CHARS_PER_PAGE = 20000
 ZALO_MAX_CHARS = 2000
 
@@ -31,11 +38,17 @@ def load_sources(path="sources.txt"):
 
 
 def fetch_source(url):
-    """Trả về (tiêu đề nguồn, nội dung văn bản, danh sách tiêu đề bài)."""
-    resp = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=30)
-    resp.raise_for_status()
+    """Trả về (tiêu đề nguồn, nội dung văn bản, danh sách (tiêu đề bài, link))."""
+    try:
+        resp = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=30)
+        resp.raise_for_status()
+        content = resp.content
+    except requests.RequestException as e:
+        # Một số trang chặn truy cập không phải trình duyệt — thử lại bằng trình duyệt thật
+        print(f"[thông tin] {url}: tải thường thất bại ({e}), thử bằng trình duyệt")
+        return parse_html(url, render_with_browser(url))
 
-    feed = feedparser.parse(resp.content)
+    feed = feedparser.parse(content)
     if feed.entries:
         entries = feed.entries[:MAX_ITEMS_PER_FEED]
         text = "\n".join(
@@ -47,17 +60,56 @@ def fetch_source(url):
         headlines = [(e.get("title", ""), e.get("link", "")) for e in entries]
         return feed.feed.get("title", url), text, headlines
 
-    soup = BeautifulSoup(resp.content, "html.parser")
-    for tag in soup(["script", "style", "nav", "footer", "header", "noscript"]):
+    title, text, headlines = parse_html(url, content)
+    if len(headlines) < MIN_HEADLINES:
+        # Trang (vd. SharePoint của lamdong.gov.vn) nạp tin bằng JavaScript — mở bằng trình duyệt
+        print(f"[thông tin] {url}: ít nội dung, mở lại bằng trình duyệt")
+        try:
+            rendered = parse_html(url, render_with_browser(url))
+            if len(rendered[2]) > len(headlines):
+                return rendered
+        except Exception as e:
+            print(f"[cảnh báo] {url}: mở bằng trình duyệt thất bại: {e}")
+    return title, text, headlines
+
+
+def render_with_browser(url):
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(executable_path=os.getenv("CHROMIUM_PATH") or None)
+        try:
+            page = browser.new_page(user_agent=BROWSER_USER_AGENT, locale="vi-VN")
+            page.goto(url, wait_until="networkidle", timeout=90000)
+            return page.content()
+        finally:
+            browser.close()
+
+
+def parse_html(url, html):
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style", "noscript"]):
         tag.decompose()
     title = soup.title.get_text(strip=True) if soup.title else url
+
+    # Tiêu đề bài viết thường là các link có chữ dài
+    headlines, seen = [], set()
+    for a in soup.find_all("a", href=True):
+        t = " ".join(a.get_text(" ", strip=True).split())
+        link = urljoin(url, a["href"])
+        if len(t) >= 30 and t not in seen and link.startswith("http"):
+            seen.add(t)
+            headlines.append((t, link))
+    headlines = headlines[:MAX_LINKS_PER_PAGE]
+
+    for tag in soup(["nav", "footer", "header"]):
+        tag.decompose()
     text = soup.get_text("\n", strip=True)
     if len(text) > MAX_CHARS_PER_PAGE:
         print(f"[cảnh báo] {url}: nội dung dài {len(text)} ký tự, chỉ lấy {MAX_CHARS_PER_PAGE} ký tự đầu")
         text = text[:MAX_CHARS_PER_PAGE]
-    headlines = [
-        (h.get_text(strip=True), "") for h in soup.find_all(["h1", "h2", "h3"])[:MAX_ITEMS_PER_FEED]
-    ]
+    if headlines:
+        text += "\n\nCác bài viết trên trang:\n" + "\n".join(f"- {t} ({l})" for t, l in headlines)
     return title, text, headlines
 
 
