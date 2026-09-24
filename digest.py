@@ -80,7 +80,13 @@ def render_with_browser(url):
         browser = p.chromium.launch(executable_path=os.getenv("CHROMIUM_PATH") or None)
         try:
             page = browser.new_page(user_agent=BROWSER_USER_AGENT, locale="vi-VN")
-            page.goto(url, wait_until="networkidle", timeout=90000)
+            # Trang tin tải quảng cáo liên tục nên không chờ "mạng rảnh" — chờ khung trang rồi đợi thêm
+            page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            try:
+                page.wait_for_load_state("load", timeout=20000)
+            except Exception:
+                pass
+            page.wait_for_timeout(5000)
             return page.content()
         finally:
             browser.close()
