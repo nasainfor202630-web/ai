@@ -10,6 +10,7 @@ Cấu hình qua biến môi trường (đặt trong GitHub Secrets):
 import os
 import smtplib
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -28,6 +29,8 @@ BROWSER_USER_AGENT = USER_AGENT
 MAX_ITEMS_PER_FEED = 15
 MAX_LINKS_PER_PAGE = 40
 MIN_HEADLINES = 5
+FETCH_ATTEMPTS = 3
+RETRY_DELAY_SECONDS = 20
 MAX_CHARS_PER_PAGE = 20000
 ZALO_MAX_CHARS = 2000
 
@@ -43,7 +46,7 @@ def fetch_source(url):
         resp = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=30)
         resp.raise_for_status()
         content = resp.content
-    except requests.RequestException as e:
+    except requests.HTTPError as e:
         # Một số trang chặn truy cập không phải trình duyệt — thử lại bằng trình duyệt thật
         print(f"[thông tin] {url}: tải thường thất bại ({e}), thử bằng trình duyệt")
         return parse_html(url, render_with_browser(url))
@@ -134,6 +137,7 @@ def summarize_with_claude(collected, session_label):
         "- Mở đầu bằng 3-5 điểm nổi bật nhất.\n"
         "- Sau đó nhóm tin theo chủ đề, mỗi tin 1-2 câu, kèm đường link nếu có.\n"
         "- Gộp các tin trùng nhau giữa các trang.\n"
+        "- Bỏ qua mục menu, danh mục, video giới thiệu và bài cũ; chỉ giữ tin tức, văn bản, sự kiện.\n"
         "- Chỉ dùng thông tin có trong nội dung trên, không bịa thêm.\n"
         "- Viết dạng văn bản thuần (không dùng Markdown như ** hay #)."
     )
@@ -199,12 +203,17 @@ def main():
 
     collected, errors = [], []
     for url in load_sources():
-        try:
-            title, text, headlines = fetch_source(url)
-            collected.append((url, title, text, headlines))
-        except Exception as e:  # một trang lỗi không làm hỏng cả bản tin
-            errors.append(f"{url}: {e}")
-            print(f"[lỗi] {url}: {e}")
+        for attempt in range(1, FETCH_ATTEMPTS + 1):
+            try:
+                title, text, headlines = fetch_source(url)
+                collected.append((url, title, text, headlines))
+                break
+            except Exception as e:  # một trang lỗi không làm hỏng cả bản tin
+                print(f"[lỗi] {url} (lần {attempt}/{FETCH_ATTEMPTS}): {str(e).splitlines()[0]}")
+                if attempt == FETCH_ATTEMPTS:
+                    errors.append(url)
+                else:
+                    time.sleep(RETRY_DELAY_SECONDS * attempt)
 
     if not collected:
         print("Không lấy được trang nào.")
@@ -220,7 +229,7 @@ def main():
         body = headlines_only(collected)
 
     if errors:
-        body += "\n\n(Không truy cập được: " + "; ".join(errors) + ")"
+        body += "\n\n(Lần này không truy cập được: " + ", ".join(errors) + ")"
 
     subject = f"Tổng hợp tin - {session_label}"
     full = f"{subject}\n\n{body}"
